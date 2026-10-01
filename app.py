@@ -49,12 +49,14 @@ def save_conversation(chat_id, title, messages):
         "messages": messages,
         "timestamp": datetime.now().isoformat(),
     }
+    trigger_save()
 
 
 def delete_conversation(chat_id):
     """Delete a conversation from the session state."""
     if "all_conversations" in st.session_state and chat_id in st.session_state.all_conversations:
         del st.session_state.all_conversations[chat_id]
+        trigger_save()
 
 
 def auto_title(messages):
@@ -143,22 +145,57 @@ def cb_starter(text):
 # 4. SESSION STATE DEFAULTS
 # ══════════════════════════════════════════════
 _defaults = {
-    "all_conversations": {},
     "messages": [],
     "current_chat_id": str(uuid.uuid4()),
     "processing": False,
     "partial_response": "",
     "pending_prompt": None,
     "confirm_delete_id": None,
+    "needs_save": False,
 }
 for _key, _val in _defaults.items():
     if _key not in st.session_state:
         st.session_state[_key] = _val
 
 # ══════════════════════════════════════════════
-# 5. PAGE CONFIG
+# 5. PAGE CONFIG & LOCAL STORAGE (PERSISTENCE)
 # ══════════════════════════════════════════════
 st.set_page_config(page_title="ZtifAI", page_icon="⚡", layout="centered")
+
+import streamlit_javascript as st_js
+import json
+import streamlit.components.v1 as components
+
+# Fetch from local storage. Returns 0 on the first render, triggering a rerun when JS returns the string.
+chats_json = st_js.st_javascript("localStorage.getItem('ztifai_chats') || '{}';")
+if chats_json == 0:
+    st.stop()  # Wait for the frontend to return the data
+
+if "storage_loaded" not in st.session_state:
+    try:
+        st.session_state.all_conversations = json.loads(chats_json)
+    except:
+        st.session_state.all_conversations = {}
+    st.session_state.storage_loaded = True
+
+def trigger_save():
+    st.session_state.needs_save = True
+
+# Process any pending saves to local storage
+if st.session_state.get("needs_save", False):
+    data_str = json.dumps(st.session_state.all_conversations)
+    data_str = data_str.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"')
+    js = f"""
+    <script>
+        try {{
+            window.parent.localStorage.setItem('ztifai_chats', '{data_str}');
+        }} catch (e) {{
+            console.error("Failed to save to localStorage:", e);
+        }}
+    </script>
+    """
+    components.html(js, height=0)
+    st.session_state.needs_save = False
 
 # ══════════════════════════════════════════════
 # 6. CSS: Deep navy + neon blue
@@ -447,7 +484,23 @@ st.markdown(
     ::-webkit-scrollbar-thumb { background: #11203f; border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(26,180,255,0.5); }
 
-    :focus-visible { outline: 2px solid var(--neon) !important; outline-offset: 2px; }
+    /* Keyboard focus ring for buttons/links only (the chat input uses its own glow) */
+button:focus-visible, a:focus-visible {
+    outline: 2px solid var(--neon) !important;
+    outline-offset: 2px;
+}
+
+/* Remove the inner box/outline inside the chat input pill */
+[data-testid="stChatInput"] textarea,
+[data-testid="stChatInput"] textarea:focus,
+[data-testid="stChatInput"] textarea:focus-visible,
+[data-testid="stChatInput"] div[data-baseweb="textarea"],
+[data-testid="stChatInput"] div[data-baseweb="base-input"] {
+    outline: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+}
     @media (prefers-reduced-motion: reduce) {
         .glow-title { animation: none !important; }
     }
