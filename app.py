@@ -30,6 +30,37 @@ else:
 # Models that can't read images. Add any other text-only model IDs here.
 TEXT_ONLY_MODELS = {"poolside/laguna-xs-2.1:free"}
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_openrouter_limits(api_key, base_url):
+    import urllib.request, json
+    try:
+        if "openrouter" not in base_url.lower(): return {}
+        url = base_url.rstrip("/") + "/auth/key"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+        with urllib.request.urlopen(req, timeout=3) as res:
+            return json.loads(res.read().decode()).get("data", {})
+    except Exception:
+        return {}
+
+def get_next_utc_midnight_timestamp():
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    tomorrow = now + timedelta(days=1)
+    midnight = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=timezone.utc)
+    return midnight.timestamp()
+
+auth_data = get_openrouter_limits(API_KEY, BASE_URL)
+free_reqs = auth_data.get("free_model_daily_requests", {})
+if free_reqs.get("remaining", 1) <= 0:
+    if "exhausted_models" not in st.session_state or isinstance(st.session_state.exhausted_models, set):
+        st.session_state.exhausted_models = {}
+    
+    reset_ts = get_next_utc_midnight_timestamp()
+    for m in MODELS_LIST:
+        if m.endswith(":free") and m not in st.session_state.exhausted_models:
+            st.session_state.exhausted_models[m] = reset_ts
+
+
 
 def model_label(model_id):
     """Friendly dropdown label, e.g. 'laguna-xs-2.1 (free, text only)'."""
