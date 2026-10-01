@@ -570,10 +570,10 @@ st.markdown(
     }
 
     /* ── Model selector (pinned below the chat input) ── */
-    [data-testid="stBottomBlockContainer"] { padding-bottom: 4rem !important; }
+    [data-testid="stBottomBlockContainer"] { padding-bottom: 4rem !important; position: relative !important; }
     
     .st-key-model_bar {
-        position: fixed !important;
+        position: absolute !important;
         bottom: 12px;
         left: 0; right: 0; margin: 0 auto;
         max-width: 46rem !important; /* Exactly match Streamlit centered chat input max-width */
@@ -992,50 +992,51 @@ if doc_layout:
 # 14. MODEL SELECTOR (Pinned below chat input)
 # ══════════════════════════════════════════════
 current_model = st.session_state.selected_model
-with st.container(key="model_bar"):
-    with st.popover(
-        f":material/bolt: {model_label(current_model)}",
-        disabled=st.session_state.processing,
-    ):
-        st.markdown('<p class="menu-title">Model</p>', unsafe_allow_html=True)
-        for i, m in enumerate(MODELS_LIST):
-            is_sel = m == current_model
-            
-            # Check exhaustion status and auto-reset
-            is_exhausted = False
-            label_suffix = ""
-            exhausted_dict = st.session_state.get("exhausted_models", {})
-            if isinstance(exhausted_dict, set):
-                exhausted_dict = {model: None for model in exhausted_dict}
-                st.session_state.exhausted_models = exhausted_dict
+with st.bottom:
+    with st.container(key="model_bar"):
+        with st.popover(
+            f":material/bolt: {model_label(current_model)}",
+            disabled=st.session_state.processing,
+        ):
+            st.markdown('<p class="menu-title">Model</p>', unsafe_allow_html=True)
+            for i, m in enumerate(MODELS_LIST):
+                is_sel = m == current_model
                 
-            if m in exhausted_dict:
-                reset_time = exhausted_dict[m]
-                if reset_time is not None and time.time() > reset_time:
-                    del exhausted_dict[m]
-                else:
-                    is_exhausted = True
-                    if reset_time:
-                        mins = max(1, int((reset_time - time.time()) / 60))
-                        label_suffix = f" (Resets in {mins}m)"
+                # Check exhaustion status and auto-reset
+                is_exhausted = False
+                label_suffix = ""
+                exhausted_dict = st.session_state.get("exhausted_models", {})
+                if isinstance(exhausted_dict, set):
+                    exhausted_dict = {model: None for model in exhausted_dict}
+                    st.session_state.exhausted_models = exhausted_dict
+                    
+                if m in exhausted_dict:
+                    reset_time = exhausted_dict[m]
+                    if reset_time is not None and time.time() > reset_time:
+                        del exhausted_dict[m]
                     else:
-                        label_suffix = " (Out of tokens)"
-            
-            if is_exhausted:
-                label_prefix = ":material/error: "
-            else:
-                label_prefix = ":material/check: " if is_sel else ""
+                        is_exhausted = True
+                        if reset_time:
+                            mins = max(1, int((reset_time - time.time()) / 60))
+                            label_suffix = f" (Resets in {mins}m)"
+                        else:
+                            label_suffix = " (Out of tokens)"
+                
+                if is_exhausted:
+                    label_prefix = ":material/error: "
+                else:
+                    label_prefix = ":material/check: " if is_sel else ""
 
-            st.button(
-                label_prefix + model_label(m) + label_suffix,
-                key=f"{'mdlsel' if is_sel else 'mdl'}_{i}",
-                on_click=cb_select_model,
-                args=(m,),
-                use_container_width=True,
-                disabled=is_exhausted
-            )
-    if current_model in TEXT_ONLY_MODELS:
-        st.markdown('<span class="model-chip">Text only mode</span>', unsafe_allow_html=True)
+                st.button(
+                    label_prefix + model_label(m) + label_suffix,
+                    key=f"{'mdlsel' if is_sel else 'mdl'}_{i}",
+                    on_click=cb_select_model,
+                    args=(m,),
+                    use_container_width=True,
+                    disabled=is_exhausted
+                )
+        if current_model in TEXT_ONLY_MODELS:
+            st.markdown('<span class="model-chip">Text only mode</span>', unsafe_allow_html=True)
 
 # 15. CHAT INPUT (disabled while processing)
 # ══════════════════════════════════════════════
