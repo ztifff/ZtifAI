@@ -1,11 +1,9 @@
 import streamlit as st
 from openai import OpenAI
 import os
-import json
 import uuid
 import time
 from datetime import datetime
-from pathlib import Path
 from dotenv import load_dotenv
 
 # ══════════════════════════════════════════════
@@ -13,19 +11,30 @@ from dotenv import load_dotenv
 # ══════════════════════════════════════════════
 load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1") # Default or set in .env
-# We are using a single model from .env now
+BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "poolside/poolside-model-id-here")
+
+# Starter prompts shown on an empty chat: (button label, prompt sent)
+STARTERS = [
+    (":material/lightbulb: Brainstorm ideas", "Help me brainstorm ideas for a weekend project."),
+    (":material/code: Debug some code", "Help me debug some code. I'll paste it in my next message."),
+    (":material/school: Explain a concept", "Explain a complicated concept to me in simple terms."),
+    (":material/edit_note: Draft a message", "Help me draft a short, friendly message."),
+]
 
 # ══════════════════════════════════════════════
 # 2. CONVERSATION MANAGEMENT
 # ══════════════════════════════════════════════
 def load_all_conversations():
-    """Load all saved conversations from the current session, sorted newest first."""
+    """Load all saved conversations from the current session, newest first."""
     if "all_conversations" not in st.session_state:
         st.session_state.all_conversations = {}
     return dict(
-        sorted(st.session_state.all_conversations.items(), key=lambda x: x[1].get("timestamp", ""), reverse=True)
+        sorted(
+            st.session_state.all_conversations.items(),
+            key=lambda x: x[1].get("timestamp", ""),
+            reverse=True,
+        )
     )
 
 
@@ -33,7 +42,7 @@ def save_conversation(chat_id, title, messages):
     """Save a conversation to the current session state."""
     if "all_conversations" not in st.session_state:
         st.session_state.all_conversations = {}
-    
+
     st.session_state.all_conversations[chat_id] = {
         "id": chat_id,
         "title": title,
@@ -71,7 +80,7 @@ def save_current_chat():
 # 3. CALLBACKS (run before script re-executes)
 # ══════════════════════════════════════════════
 def cb_stop_generating():
-    """Callback: stop the AI generation and save partial response."""
+    """Stop the AI generation and save the partial response."""
     st.session_state.processing = False
     partial = st.session_state.partial_response
     if partial:
@@ -84,7 +93,7 @@ def cb_stop_generating():
 
 
 def cb_new_chat():
-    """Callback: save current chat, then start a fresh one."""
+    """Save the current chat, then start a fresh one."""
     save_current_chat()
     st.session_state.messages = []
     st.session_state.current_chat_id = str(uuid.uuid4())
@@ -94,7 +103,7 @@ def cb_new_chat():
 
 
 def cb_load_chat(chat_id):
-    """Callback: save current chat, then load a different one."""
+    """Save the current chat, then load a different one."""
     save_current_chat()
     conversations = load_all_conversations()
     if chat_id in conversations:
@@ -106,18 +115,28 @@ def cb_load_chat(chat_id):
 
 
 def cb_delete_chat(chat_id):
-    """Callback: delete a conversation."""
+    """Delete a conversation."""
     delete_conversation(chat_id)
     if chat_id == st.session_state.current_chat_id:
         st.session_state.messages = []
         st.session_state.current_chat_id = str(uuid.uuid4())
     st.session_state.confirm_delete_id = None
 
+
 def cb_init_delete(chat_id):
     st.session_state.confirm_delete_id = chat_id
 
+
 def cb_cancel_delete():
     st.session_state.confirm_delete_id = None
+
+
+def cb_starter(text):
+    """Send a starter prompt as the first message of a chat."""
+    st.session_state.messages.append({"role": "user", "content": text})
+    st.session_state.processing = True
+    st.session_state.pending_prompt = text
+    save_current_chat()
 
 
 # ══════════════════════════════════════════════
@@ -142,270 +161,305 @@ for _key, _val in _defaults.items():
 st.set_page_config(page_title="ZtifAI", page_icon="⚡", layout="centered")
 
 # ══════════════════════════════════════════════
-# 6. CSS — Pitch Black + Neon Glow Theme
+# 6. CSS: Deep navy + neon blue
 # ══════════════════════════════════════════════
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
     :root {
-        --bg-primary: #000000;
-        --bg-card: #0d0d0d;
-        --bg-input: #111111;
-        --glow-cyan: #00f0ff;
-        --glow-purple: #a855f7;
-        --glow-pink: #f472b6;
-        --text-primary: #e4e4e7;
-        --text-secondary: #a1a1aa;
-        --text-muted: #52525b;
-        --border: #1a1a1a;
+        --bg: #01030b;
+        --surface: #050a17;
+        --surface-2: #08112a;
+        --neon: #1ab4ff;
+        --neon-bright: #66d9ff;
+        --electric: #3366ff;
+        --text: #dce8ff;
+        --text-soft: #93a7cf;
+        --text-muted: #5a6d96;
+        --border: rgba(26, 180, 255, 0.14);
+        --border-strong: rgba(26, 180, 255, 0.40);
+        --danger: #ff5c7a;
     }
 
-    .stApp { background-color: var(--bg-primary) !important; font-family: 'Inter', sans-serif !important; }
-    #MainMenu, footer, .stDeployButton { display: none !important; }
-    header[data-testid="stHeader"] {
-        background-color: rgba(0,0,0,0.85) !important;
-        backdrop-filter: blur(12px);
-        border-bottom: 1px solid var(--border);
+    /* ── Base ── */
+    .stApp {
+        background:
+            radial-gradient(ellipse 70% 40% at 50% -10%, rgba(26,180,255,0.14), transparent 70%),
+            radial-gradient(ellipse 50% 30% at 100% 100%, rgba(51,102,255,0.10), transparent 70%),
+            var(--bg) !important;
+        font-family: 'DM Sans', sans-serif !important;
     }
+    #MainMenu, footer,
+    [data-testid="stAppDeployButton"], [data-testid="stMainMenu"], .stDeployButton { display: none !important; }
+    header[data-testid="stHeader"] { background: transparent !important; }
+
+    .stMarkdown p, .stMarkdown li, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3,
+    .stMarkdown h4, label { color: var(--text) !important; }
 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {
-        background-color: var(--bg-primary) !important;
+        background: linear-gradient(180deg, #030816 0%, var(--bg) 100%) !important;
         border-right: 1px solid var(--border) !important;
     }
     section[data-testid="stSidebar"] .stMarkdown h2 {
-        color: var(--glow-cyan) !important;
-        text-shadow: 0 0 7px rgba(0,240,255,0.4), 0 0 20px rgba(0,240,255,0.2);
-        font-weight: 700 !important; letter-spacing: 1px;
+        font-family: 'Sora', sans-serif !important;
+        color: var(--neon-bright) !important;
+        text-shadow: 0 0 8px rgba(26,180,255,0.65), 0 0 24px rgba(26,180,255,0.35);
+        font-weight: 700 !important;
+        letter-spacing: 0.5px;
     }
-    section[data-testid="stSidebar"] hr { border-color: var(--border) !important; opacity: 0.5; }
+    section[data-testid="stSidebar"] hr { border-color: var(--border) !important; opacity: 1; }
 
-    /* ── Sidebar new-chat button ── */
-    section[data-testid="stSidebar"] .new-chat-btn button {
-        width: 100% !important;
-        background: linear-gradient(135deg, rgba(0,240,255,0.08), rgba(168,85,247,0.08)) !important;
-        color: var(--glow-cyan) !important;
-        border: 1px solid rgba(0,240,255,0.2) !important;
-        border-radius: 10px !important; padding: 10px 20px !important;
-        font-weight: 500 !important; letter-spacing: 0.5px;
-        transition: all 0.3s ease !important;
+    /* Make button text follow the button color (beats the global p rule) */
+    [class*="st-key-"] button p { color: inherit !important; }
+
+    /* ── New chat button ── */
+    .st-key-new_chat button {
+        background: linear-gradient(135deg, rgba(26,180,255,0.16), rgba(51,102,255,0.16)) !important;
+        color: var(--neon-bright) !important;
+        border: 1px solid var(--border-strong) !important;
+        border-radius: 12px !important;
+        padding: 10px 16px !important;
+        font-weight: 600 !important;
+        transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
     }
-    section[data-testid="stSidebar"] .new-chat-btn button:hover {
-        background: linear-gradient(135deg, rgba(0,240,255,0.18), rgba(168,85,247,0.18)) !important;
-        border-color: var(--glow-cyan) !important;
-        box-shadow: 0 0 15px rgba(0,240,255,0.2), 0 0 30px rgba(0,240,255,0.1) !important;
+    .st-key-new_chat button:hover {
+        border-color: var(--neon) !important;
+        box-shadow: 0 0 18px rgba(26,180,255,0.35), inset 0 0 12px rgba(26,180,255,0.10) !important;
     }
 
-    /* ── Sidebar conversation buttons ── */
-    section[data-testid="stSidebar"] .conv-btn button {
+    /* ── Sidebar chat rows ── */
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
         width: 100% !important;
+        gap: 0.4rem !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stColumn"],
+    section[data-testid="stSidebar"] div[data-testid="column"] {
+        min-width: 0 !important;
+        flex: 1 1 0 !important;
+        width: auto !important;
+    }
+    /* The column holding the delete button is a fixed 44px */
+    section[data-testid="stSidebar"] div[data-testid="stColumn"]:has([class*="st-key-del_"]),
+    section[data-testid="stSidebar"] div[data-testid="column"]:has([class*="st-key-del_"]) {
+        flex: 0 0 44px !important;
+        width: 44px !important;
+    }
+
+    /* Chat title buttons: truncate instead of widening the sidebar */
+    section[data-testid="stSidebar"] button div p {
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        max-width: 100% !important;
+    }
+    [class*="st-key-load_"] button {
         background: transparent !important;
-        color: var(--text-secondary) !important;
+        color: var(--text-soft) !important;
         border: 1px solid transparent !important;
-        border-radius: 8px !important;
+        border-radius: 10px !important;
         padding: 8px 12px !important;
-        font-size: 0.82rem !important;
-        text-align: left !important;
-        transition: all 0.2s ease !important;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        font-size: 0.85rem !important;
+        justify-content: flex-start !important;
+        transition: background 0.2s ease, border-color 0.2s ease !important;
     }
-    section[data-testid="stSidebar"] .conv-btn button:hover {
-        background: rgba(0,240,255,0.05) !important;
-        border-color: rgba(0,240,255,0.15) !important;
-        color: var(--text-primary) !important;
+    [class*="st-key-load_"] button p { text-align: left !important; }
+    [class*="st-key-load_"] button:hover:not(:disabled) {
+        background: rgba(26,180,255,0.07) !important;
+        border-color: var(--border) !important;
+        color: var(--text) !important;
     }
-    section[data-testid="stSidebar"] .conv-btn-active button {
-        background: rgba(0,240,255,0.08) !important;
-        border-color: rgba(0,240,255,0.2) !important;
-        color: var(--glow-cyan) !important;
+    /* The open chat is the disabled one, so style :disabled as "active" */
+    [class*="st-key-load_"] button:disabled {
+        opacity: 1 !important;
+        background: rgba(26,180,255,0.10) !important;
+        border-color: var(--border-strong) !important;
+        color: var(--neon-bright) !important;
+        box-shadow: inset 3px 0 0 var(--neon);
     }
-    section[data-testid="stSidebar"] .del-btn button {
+
+    /* Delete + confirm buttons */
+    [class*="st-key-del_"] button {
         background: transparent !important;
+        border: 1px solid transparent !important;
         color: var(--text-muted) !important;
-        border: none !important;
-        padding: 4px !important;
-        font-size: 0.7rem !important;
+        padding: 8px 0 !important;
         min-height: 0 !important;
-        height: auto !important;
+        border-radius: 10px !important;
     }
-    section[data-testid="stSidebar"] .del-btn button:hover {
-        color: #ef4444 !important;
+    [class*="st-key-del_"] button:hover {
+        color: var(--danger) !important;
+        border-color: rgba(255,92,122,0.35) !important;
+        background: rgba(255,92,122,0.07) !important;
     }
+    [class*="st-key-yes_"] button, [class*="st-key-no_"] button {
+        background: transparent !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+    }
+    [class*="st-key-yes_"] button {
+        color: var(--danger) !important;
+        border: 1px solid rgba(255,92,122,0.4) !important;
+    }
+    [class*="st-key-yes_"] button:hover { background: rgba(255,92,122,0.12) !important; }
+    [class*="st-key-no_"] button {
+        color: var(--text-soft) !important;
+        border: 1px solid var(--border) !important;
+    }
+    [class*="st-key-no_"] button:hover { border-color: var(--border-strong) !important; }
 
-    /* ── Text ── */
-    h1, h2, h3, p, span, li, label, div { color: var(--text-primary) !important; }
-
-    /* ── Glow title ── */
+    /* ── Hero ── */
     .glow-title {
-        font-size: 2.8rem !important; font-weight: 800 !important;
-        background: linear-gradient(135deg, var(--glow-cyan), var(--glow-purple), var(--glow-pink));
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-        filter: drop-shadow(0 0 20px rgba(0,240,255,0.3));
-        letter-spacing: -0.5px; margin-bottom: 0 !important;
-        animation: titlePulse 3s ease-in-out infinite;
+        font-family: 'Sora', sans-serif !important;
+        font-size: 3.2rem !important; font-weight: 800 !important;
+        letter-spacing: -1px; margin: 3rem 0 0 0 !important; padding: 0 !important;
+        text-align: center;
+        background: linear-gradient(120deg, #8fe6ff 0%, var(--neon) 45%, var(--electric) 100%);
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent;
+        filter: drop-shadow(0 0 18px rgba(26,180,255,0.45));
+        animation: titlePulse 4s ease-in-out infinite;
     }
     @keyframes titlePulse {
-        0%, 100% { filter: drop-shadow(0 0 20px rgba(0,240,255,0.3)); }
-        50% { filter: drop-shadow(0 0 35px rgba(0,240,255,0.5)); }
+        0%, 100% { filter: drop-shadow(0 0 16px rgba(26,180,255,0.35)); }
+        50%      { filter: drop-shadow(0 0 30px rgba(26,180,255,0.65)); }
     }
     .subtitle {
-        color: var(--text-muted) !important; font-size: 0.9rem !important;
-        font-weight: 300 !important; letter-spacing: 2px; text-transform: uppercase; margin-top: 0 !important;
+        color: var(--text-soft) !important; text-align: center;
+        font-size: 1rem !important; margin: 0.4rem 0 2.2rem 0 !important;
+    }
+
+    /* Starter prompt buttons */
+    [class*="st-key-sug_"] button {
+        background: var(--surface) !important;
+        color: var(--text-soft) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 14px !important;
+        padding: 16px 18px !important;
+        justify-content: flex-start !important;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease !important;
+    }
+    [class*="st-key-sug_"] button:hover {
+        color: var(--neon-bright) !important;
+        border-color: var(--border-strong) !important;
+        box-shadow: 0 0 20px rgba(26,180,255,0.18) !important;
     }
 
     /* ── Chat messages ── */
-    .stChatMessage {
-        background-color: var(--bg-card) !important;
+    [data-testid="stChatMessage"] {
+        background: var(--surface) !important;
         border: 1px solid var(--border) !important;
-        border-radius: 16px !important; padding: 16px 20px !important;
-        margin-bottom: 12px !important; transition: all 0.3s ease;
+        border-radius: 16px !important;
+        padding: 16px 20px !important;
+        margin-bottom: 12px !important;
     }
-    .stChatMessage:hover {
-        border-color: rgba(0,240,255,0.15) !important;
-        box-shadow: 0 0 20px rgba(0,240,255,0.05) !important;
+    /* Your messages get a brighter edge */
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]),
+    [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+        background: var(--surface-2) !important;
+        border-color: var(--border-strong) !important;
+        box-shadow: inset 3px 0 0 var(--neon);
     }
-    .stChatMessage p, .stChatMessage span, .stChatMessage li {
-        color: var(--text-primary) !important; font-size: 0.95rem !important; line-height: 1.7 !important;
+    [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {
+        color: var(--text) !important; font-size: 0.97rem !important; line-height: 1.7 !important;
     }
-    .stChatMessage code {
-        background-color: #1a1a2e !important; color: var(--glow-cyan) !important;
-        padding: 2px 6px !important; border-radius: 4px !important;
+    [data-testid="stChatMessage"] code {
+        background: rgba(26,180,255,0.10) !important; color: var(--neon-bright) !important;
+        padding: 2px 6px !important; border-radius: 5px !important;
         font-family: 'JetBrains Mono', monospace !important; font-size: 0.85rem !important;
     }
-    .stChatMessage pre {
-        background-color: #0a0a1a !important; border: 1px solid var(--border) !important;
-        border-radius: 10px !important; padding: 16px !important;
+    [data-testid="stChatMessage"] pre {
+        background: #020612 !important; border: 1px solid var(--border) !important;
+        border-radius: 12px !important; padding: 16px !important;
     }
+    [data-testid="stChatMessage"] pre code { background: transparent !important; padding: 0 !important; }
 
     /* ── Chat input ── */
-    .stChatInput > div {
-        background-color: var(--bg-input) !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 28px !important; transition: all 0.3s ease !important;
+    [data-testid="stBottom"], [data-testid="stBottom"] > div {
+        background: transparent !important;
     }
-    .stChatInput > div:focus-within {
-        border-color: rgba(0,240,255,0.4) !important;
-        box-shadow: 0 0 15px rgba(0,240,255,0.1), 0 0 30px rgba(0,240,255,0.05),
-                    inset 0 0 15px rgba(0,240,255,0.03) !important;
+    [data-testid="stBottom"] {
+        background: linear-gradient(to top, var(--bg) 55%, transparent) !important;
     }
-    .stChatInput textarea {
-        color: var(--text-primary) !important; font-family: 'Inter', sans-serif !important;
-        caret-color: var(--glow-cyan) !important;
+    .stChatInput > div, [data-testid="stChatInput"] > div {
+        background: var(--surface) !important;
+        border: 1px solid var(--border-strong) !important;
+        border-radius: 28px !important;
+        box-shadow: 0 0 14px rgba(26,180,255,0.12) !important;
+        transition: box-shadow 0.25s ease, border-color 0.25s ease !important;
+    }
+    .stChatInput > div:focus-within, [data-testid="stChatInput"] > div:focus-within {
+        border-color: var(--neon) !important;
+        box-shadow: 0 0 22px rgba(26,180,255,0.35), 0 0 48px rgba(26,180,255,0.15),
+                    inset 0 0 14px rgba(26,180,255,0.06) !important;
+    }
+    .stChatInput textarea, [data-testid="stChatInput"] textarea {
+        color: var(--text) !important; font-family: 'DM Sans', sans-serif !important;
+        caret-color: var(--neon) !important; background: transparent !important;
     }
     .stChatInput textarea::placeholder { color: var(--text-muted) !important; }
-    .stChatInput button { color: var(--glow-cyan) !important; transition: all 0.3s ease !important; }
-    .stChatInput button:hover { filter: drop-shadow(0 0 8px rgba(0,240,255,0.5)) !important; }
-
-    /* ── Disabled input ── */
-    .stChatInput textarea:disabled { opacity: 0.3 !important; }
+    .stChatInput textarea:disabled { opacity: 0.35 !important; }
+    .stChatInput button, [data-testid="stChatInputSubmitButton"] {
+        background: linear-gradient(135deg, var(--neon), var(--electric)) !important;
+        color: #01030b !important; border-radius: 50% !important;
+    }
+    .stChatInput button:hover { box-shadow: 0 0 14px rgba(26,180,255,0.7) !important; }
 
     /* ── Stop button ── */
-    .stop-btn button {
-        background: rgba(239, 68, 68, 0.1) !important;
-        color: #ef4444 !important;
-        border: 1px solid rgba(239, 68, 68, 0.3) !important;
+    .st-key-stop_btn button {
+        background: rgba(255,92,122,0.08) !important;
+        color: var(--danger) !important;
+        border: 1px solid rgba(255,92,122,0.35) !important;
         border-radius: 20px !important;
-        padding: 6px 24px !important;
-        font-size: 0.8rem !important;
-        font-weight: 500 !important;
-        transition: all 0.3s ease !important;
+        font-size: 0.85rem !important; font-weight: 500 !important;
+        transition: box-shadow 0.2s ease, background 0.2s ease !important;
     }
-    .stop-btn button:hover {
-        background: rgba(239, 68, 68, 0.2) !important;
-        border-color: #ef4444 !important;
-        box-shadow: 0 0 15px rgba(239, 68, 68, 0.2) !important;
+    .st-key-stop_btn button:hover {
+        background: rgba(255,92,122,0.16) !important;
+        box-shadow: 0 0 16px rgba(255,92,122,0.25) !important;
     }
 
-    /* ── Spinner ── */
-    .stSpinner > div { border-top-color: var(--glow-cyan) !important; }
-    .stSpinner p { color: var(--glow-cyan) !important; text-shadow: 0 0 10px rgba(0,240,255,0.3); }
+    /* ── Misc ── */
+    .stSpinner > div { border-top-color: var(--neon) !important; }
+    .section-label {
+        color: var(--text-muted) !important; font-size: 0.8rem !important;
+        font-weight: 500; margin-bottom: 6px;
+    }
+    .powered-by { color: var(--text-muted) !important; font-size: 0.78rem !important; }
+    .powered-by span { color: var(--neon) !important; text-shadow: 0 0 8px rgba(26,180,255,0.45); }
 
-    /* ── API warning ── */
     .api-warning {
-        background: linear-gradient(135deg, rgba(168,85,247,0.1), rgba(244,114,182,0.1));
-        border: 1px solid rgba(168,85,247,0.3); padding: 24px; border-radius: 16px;
-        text-align: center; margin: 30px 0; box-shadow: 0 0 30px rgba(168,85,247,0.1);
+        background: linear-gradient(135deg, rgba(26,180,255,0.08), rgba(51,102,255,0.08));
+        border: 1px solid var(--border-strong); padding: 24px; border-radius: 16px;
+        text-align: center; margin: 30px 0; box-shadow: 0 0 30px rgba(26,180,255,0.10);
     }
-    .api-warning p { color: #e4e4e7 !important; margin: 4px 0; }
-    .api-warning strong { color: var(--glow-purple) !important; text-shadow: 0 0 10px rgba(168,85,247,0.4); }
-    .api-warning code { color: var(--glow-cyan) !important; background: rgba(0,240,255,0.08); padding: 2px 8px; border-radius: 4px; }
-    .api-warning a { color: var(--glow-cyan) !important; text-decoration: underline; }
+    .api-warning p { color: var(--text) !important; margin: 4px 0; }
+    .api-warning strong { color: var(--neon-bright) !important; }
+    .api-warning code { color: var(--neon-bright) !important; background: rgba(26,180,255,0.10); padding: 2px 8px; border-radius: 5px; }
 
-    /* ── Scrollbar ── */
     ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: var(--bg-primary); }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(0,240,255,0.3); }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: #11203f; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(26,180,255,0.5); }
 
-    /* ── Ambient glow ── */
-    .ambient-glow {
-        position: fixed; top: -200px; left: 50%; transform: translateX(-50%);
-        width: 600px; height: 400px;
-        background: radial-gradient(ellipse, rgba(0,240,255,0.06) 0%, transparent 70%);
-        pointer-events: none; z-index: 0;
-        animation: ambientBreathe 5s ease-in-out infinite;
-    }
-    @keyframes ambientBreathe {
-        0%, 100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
-        50% { opacity: 1; transform: translateX(-50%) scale(1.1); }
+    :focus-visible { outline: 2px solid var(--neon) !important; outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) {
+        .glow-title { animation: none !important; }
     }
 
-    .powered-by { color: var(--text-muted) !important; font-size: 0.7rem !important; letter-spacing: 1px; text-transform: uppercase; }
-    .powered-by span { color: var(--glow-cyan) !important; text-shadow: 0 0 6px rgba(0,240,255,0.3); }
-    .section-label { color: var(--text-muted) !important; font-size: 0.7rem !important; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px; }
-
-    /* ── Model selector dropdown ── */
-    section[data-testid="stSidebar"] .stSelectbox > div > div {
-        background-color: #0d0d0d !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 8px !important;
-        color: var(--text-primary) !important;
-    }
-    section[data-testid="stSidebar"] .stSelectbox > div > div:hover {
-        border-color: rgba(0,240,255,0.3) !important;
-    }
-    section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] span {
-        color: var(--glow-cyan) !important;
-        font-size: 0.8rem !important;
-    }
-    /* ── Mobile Responsiveness ── */
+    /* ── Mobile ── */
     @media (max-width: 768px) {
-        .stChatMessage { padding: 12px 14px !important; }
-        .glow-title { font-size: 2rem !important; }
-        
-        /* Force Streamlit sidebar columns to not stack vertically */
-        section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
-            flex-direction: row !important;
-            flex-wrap: nowrap !important;
-            gap: 4px !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
-            width: 70% !important;
-            flex: 1 1 70% !important;
-            min-width: 0 !important;
-        }
-        section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child {
-            width: 30% !important;
-            flex: 1 1 30% !important;
-            min-width: 0 !important;
-        }
-        
-        section[data-testid="stSidebar"] .conv-btn button,
-        section[data-testid="stSidebar"] .conv-btn-active button {
-            font-size: 0.9rem !important;
-            padding: 10px !important;
-        }
-        section[data-testid="stSidebar"] .del-btn button {
-            font-size: 1.1rem !important;
-            padding: 10px !important;
-        }
+        .glow-title { font-size: 2.2rem !important; margin-top: 1.5rem !important; }
+        [data-testid="stChatMessage"] { padding: 12px 14px !important; }
+        section[data-testid="stSidebar"] [class*="st-key-load_"] button { font-size: 0.9rem !important; padding: 10px !important; }
+        section[data-testid="stSidebar"] [class*="st-key-del_"] button { font-size: 1.1rem !important; }
     }
     </style>
-    <div class="ambient-glow"></div>
     """,
     unsafe_allow_html=True,
 )
@@ -417,55 +471,60 @@ with st.sidebar:
     st.markdown("## ⚡ ZtifAI")
     st.markdown("---")
 
-    # New Chat button
-    with st.container():
-        st.markdown('<div class="new-chat-btn">', unsafe_allow_html=True)
-        st.button("✦  New Chat", on_click=cb_new_chat, use_container_width=True, key="new_chat")
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.button(
+        ":material/add: New chat",
+        on_click=cb_new_chat,
+        use_container_width=True,
+        key="new_chat",
+    )
 
     st.markdown("---")
 
-    # Conversation history
     conversations = load_all_conversations()
     if conversations:
-        st.markdown('<p class="section-label">Recent Chats</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-label">Recent chats</p>', unsafe_allow_html=True)
         for chat_id, conv in conversations.items():
             is_current = chat_id == st.session_state.current_chat_id
-            css_class = "conv-btn-active" if is_current else "conv-btn"
 
             if st.session_state.confirm_delete_id == chat_id:
-                # Show confirmation UI
-                st.markdown(f"<div style='color: #ef4444; font-size: 0.8rem; margin-bottom: 4px;'>Delete {conv['title'][:15]}...?</div>", unsafe_allow_html=True)
                 col_y, col_n = st.columns(2)
                 with col_y:
-                    st.button("✓ Yes", key=f"yes_{chat_id}", on_click=cb_delete_chat, args=(chat_id,), use_container_width=True)
-                with col_n:
-                    st.button("✗ No", key=f"no_{chat_id}", on_click=cb_cancel_delete, use_container_width=True)
-                st.markdown("<hr style='margin: 8px 0; border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
-            else:
-                # Changed from [6, 1] to [5, 2] so the delete button isn't squished on small screens
-                col1, col2 = st.columns([5, 2])
-                with col1:
-                    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
                     st.button(
-                        f"💬 {conv['title']}",
+                        ":material/check:",
+                        key=f"yes_{chat_id}",
+                        on_click=cb_delete_chat,
+                        args=(chat_id,),
+                        use_container_width=True,
+                        help="Confirm delete",
+                    )
+                with col_n:
+                    st.button(
+                        ":material/close:",
+                        key=f"no_{chat_id}",
+                        on_click=cb_cancel_delete,
+                        use_container_width=True,
+                        help="Cancel",
+                    )
+            else:
+                col1, col2 = st.columns([0.8, 0.2])
+                with col1:
+                    st.button(
+                        conv["title"],
                         key=f"load_{chat_id}",
                         on_click=cb_load_chat,
                         args=(chat_id,),
                         use_container_width=True,
                         disabled=is_current,
                     )
-                    st.markdown("</div>", unsafe_allow_html=True)
                 with col2:
-                    st.markdown('<div class="del-btn">', unsafe_allow_html=True)
                     st.button(
-                        "🗑",
+                        ":material/delete:",
                         key=f"del_{chat_id}",
                         on_click=cb_init_delete,
                         args=(chat_id,),
                         use_container_width=True,
+                        help="Delete chat",
                     )
-                    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown(
@@ -482,7 +541,7 @@ if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
     st.markdown(
         """
         <div class="api-warning">
-            <p><strong>⚠️ API Key not configured</strong></p>
+            <p><strong>⚠️ API key not configured</strong></p>
             <p>Open the <code>.env</code> file and paste your Opencode (or OpenAI) API key.</p>
             <p><small><code>OPENAI_API_KEY=oc_sk_...</code></small></p>
             <p><small>Optionally add <code>OPENAI_BASE_URL</code> and <code>MODEL_NAME</code>.</small></p>
@@ -501,7 +560,7 @@ client = OpenAI(
     default_headers={
         "HTTP-Referer": "http://localhost:8509",
         "X-Title": "ZtifAI",
-    }
+    },
 )
 
 SYSTEM_INSTRUCTION = (
@@ -510,15 +569,28 @@ SYSTEM_INSTRUCTION = (
     "you say so honestly. You can use markdown formatting in your responses."
 )
 
-
 # ══════════════════════════════════════════════
-# 10. MAIN HEADER (only when chat is empty)
+# 10. MAIN HEADER + STARTERS (only when chat is empty)
 # ══════════════════════════════════════════════
 if not st.session_state.messages and not st.session_state.processing:
     st.markdown('<h1 class="glow-title">⚡ ZtifAI</h1>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="subtitle">Your personal AI assistant</p>', unsafe_allow_html=True
+        '<p class="subtitle">Ask anything, or start with one of these.</p>',
+        unsafe_allow_html=True,
     )
+    for row in range(0, len(STARTERS), 2):
+        cols = st.columns(2)
+        for col, idx in zip(cols, (row, row + 1)):
+            if idx < len(STARTERS):
+                label, text = STARTERS[idx]
+                with col:
+                    st.button(
+                        label,
+                        key=f"sug_{idx}",
+                        on_click=cb_starter,
+                        args=(text,),
+                        use_container_width=True,
+                    )
 
 # ══════════════════════════════════════════════
 # 11. DISPLAY CHAT MESSAGES
@@ -532,16 +604,14 @@ for msg in st.session_state.messages:
 # 12. STOP BUTTON (visible only while processing)
 # ══════════════════════════════════════════════
 if st.session_state.processing:
-    col1, col2, col3 = st.columns([2, 1, 2])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown('<div class="stop-btn">', unsafe_allow_html=True)
         st.button(
-            "⏹ Stop generating",
+            ":material/stop_circle: Stop generating",
             on_click=cb_stop_generating,
             use_container_width=True,
             key="stop_btn",
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════
 # 13. AI RESPONSE GENERATION (streaming)
@@ -558,14 +628,13 @@ if st.session_state.processing and st.session_state.pending_prompt:
 
         for attempt in range(max_retries + 1):
             try:
-                # Build history: system prompt + previous messages + new prompt
                 messages_for_api = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
                 messages_for_api.extend(st.session_state.messages)
 
                 response = client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=messages_for_api,
-                    stream=True
+                    stream=True,
                 )
 
                 full_response = ""
@@ -579,17 +648,17 @@ if st.session_state.processing and st.session_state.pending_prompt:
                 st.session_state.messages.append(
                     {"role": "assistant", "content": full_response}
                 )
-                break  # Success! Exit the retry loop.
+                break
 
             except Exception as e:
                 error_str = str(e)
-                # Retry silently on rate limits (429), BYOK provider errors (403), or bad gateway (502/503)
-                is_retriable = any(code in error_str for code in ["429", "403", "502", "503", "rate-limited"])
-                
+                is_retriable = any(
+                    code in error_str for code in ["429", "403", "502", "503", "rate-limited"]
+                )
+
                 if is_retriable and attempt < max_retries:
-                    # Exponential backoff: 2s, 4s, 8s, 16s...
                     time.sleep(base_delay * (2 ** attempt))
-                    placeholder.markdown("▌")  # Reset to just the thinking cursor
+                    placeholder.markdown("▌")
                     continue
                 else:
                     error_msg = f"⚠️ Something went wrong: `{e}`"
@@ -599,7 +668,6 @@ if st.session_state.processing and st.session_state.pending_prompt:
                     )
                     break
 
-    # Done processing
     st.session_state.processing = False
     st.session_state.pending_prompt = None
     st.session_state.partial_response = ""
@@ -609,16 +677,12 @@ if st.session_state.processing and st.session_state.pending_prompt:
 # ══════════════════════════════════════════════
 # 14. CHAT INPUT (disabled while processing)
 # ══════════════════════════════════════════════
-if prompt := st.chat_input(
-    "Message ZtifAI...", disabled=st.session_state.processing
-):
-    # Display user message immediately
+if prompt := st.chat_input("Message ZtifAI...", disabled=st.session_state.processing):
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
-    # Save to session & trigger processing
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.session_state.processing = True
     st.session_state.pending_prompt = prompt
-    save_current_chat()  # Save so it appears in sidebar immediately
+    save_current_chat()
     st.rerun()
