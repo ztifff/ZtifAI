@@ -1,18 +1,46 @@
+# pyrefly: ignore [missing-import]
 import streamlit as st
+# pyrefly: ignore [missing-import]
 from openai import OpenAI
+# pyrefly: ignore [missing-import]
 import os
+# pyrefly: ignore [missing-import]
 import uuid
+# pyrefly: ignore [missing-import]
 import time
+# pyrefly: ignore [missing-import]
 from datetime import datetime
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
+import base64
 
 # ══════════════════════════════════════════════
 # 1. CONFIGURATION
 # ══════════════════════════════════════════════
-load_dotenv()
+load_dotenv(override=True)
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "poolside/poolside-model-id-here")
+MODEL_NAME = os.getenv("MODEL_NAME", "poolside/laguna-xs-2.1:free")
+AVAILABLE_MODELS_ENV = os.getenv("AVAILABLE_MODELS", "")
+if AVAILABLE_MODELS_ENV:
+    MODELS_LIST = [m.strip() for m in AVAILABLE_MODELS_ENV.split(",") if m.strip()]
+else:
+    MODELS_LIST = [MODEL_NAME]
+
+# Models that can't read images. Add any other text-only model IDs here.
+TEXT_ONLY_MODELS = {"poolside/laguna-xs-2.1:free"}
+
+
+def model_label(model_id):
+    """Friendly dropdown label, e.g. 'laguna-xs-2.1 (free, text only)'."""
+    name = model_id.split("/")[-1].replace(":free", "")
+    tags = []
+    if model_id.endswith(":free"):
+        tags.append("free")
+    if model_id in TEXT_ONLY_MODELS:
+        tags.append("text only")
+    return f"{name} ({', '.join(tags)})" if tags else name
+
 
 # Starter prompts shown on an empty chat: (button label, prompt sent)
 STARTERS = [
@@ -63,7 +91,15 @@ def auto_title(messages):
     """Generate a conversation title from the first user message."""
     for msg in messages:
         if msg["role"] == "user":
-            text = msg["content"].strip().replace("\n", " ")
+            content = msg["content"]
+            if isinstance(content, list):
+                text = " ".join([p["text"] for p in content if p.get("type") == "text"])
+                if not text.strip():
+                    text = "Image Upload"
+            else:
+                text = str(content)
+
+            text = text.strip().replace("\n", " ")
             return text[:40] + ("..." if len(text) > 40 else "")
     return "New Chat"
 
@@ -141,6 +177,25 @@ def cb_starter(text):
     save_current_chat()
 
 
+
+def cb_view_doc(text, name, b64_preview=None, mime=None):
+    st.session_state.viewing_doc_text = text
+    st.session_state.viewing_doc_name = name
+    st.session_state.viewing_doc_b64 = b64_preview
+    st.session_state.viewing_doc_mime = mime
+
+def cb_close_doc():
+    st.session_state.viewing_doc_text = None
+    st.session_state.viewing_doc_name = None
+    st.session_state.viewing_doc_b64 = None
+    st.session_state.viewing_doc_mime = None
+
+def cb_select_model(model_id):
+    """Switch the active model and ask the menu to close."""
+    st.session_state.selected_model = model_id
+    st.session_state.close_model_menu = True
+
+
 # ══════════════════════════════════════════════
 # 4. SESSION STATE DEFAULTS
 # ══════════════════════════════════════════════
@@ -152,6 +207,12 @@ _defaults = {
     "pending_prompt": None,
     "confirm_delete_id": None,
     "needs_save": False,
+    "selected_model": MODEL_NAME if MODEL_NAME in MODELS_LIST else MODELS_LIST[0],
+    "close_model_menu": False,
+    "viewing_doc_name": None,
+    "viewing_doc_text": None,
+    "viewing_doc_b64": None,
+    "viewing_doc_mime": None,
 }
 for _key, _val in _defaults.items():
     if _key not in st.session_state:
@@ -160,10 +221,12 @@ for _key, _val in _defaults.items():
 # ══════════════════════════════════════════════
 # 5. PAGE CONFIG & LOCAL STORAGE (PERSISTENCE)
 # ══════════════════════════════════════════════
-st.set_page_config(page_title="ZtifAI", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="ZtifAI", page_icon="icon.svg", layout="centered")
 
+# pyrefly: ignore [missing-import]
 import streamlit_javascript as st_js
 import json
+# pyrefly: ignore [missing-import]
 import streamlit.components.v1 as components
 
 # Fetch from local storage. Returns 0 on the first render, triggering a rerun when JS returns the string.
@@ -485,24 +548,114 @@ st.markdown(
     ::-webkit-scrollbar-thumb:hover { background: rgba(26,180,255,0.5); }
 
     /* Keyboard focus ring for buttons/links only (the chat input uses its own glow) */
-button:focus-visible, a:focus-visible {
-    outline: 2px solid var(--neon) !important;
-    outline-offset: 2px;
-}
+    button:focus-visible, a:focus-visible {
+        outline: 2px solid var(--neon) !important;
+        outline-offset: 2px;
+    }
 
-/* Remove the inner box/outline inside the chat input pill */
-[data-testid="stChatInput"] textarea,
-[data-testid="stChatInput"] textarea:focus,
-[data-testid="stChatInput"] textarea:focus-visible,
-[data-testid="stChatInput"] div[data-baseweb="textarea"],
-[data-testid="stChatInput"] div[data-baseweb="base-input"] {
-    outline: none !important;
-    box-shadow: none !important;
-    border: none !important;
-    background: transparent !important;
-}
+    /* Remove the inner box/outline inside the chat input pill */
+    [data-testid="stChatInput"] textarea,
+    [data-testid="stChatInput"] textarea:focus,
+    [data-testid="stChatInput"] textarea:focus-visible,
+    [data-testid="stChatInput"] div[data-baseweb="textarea"],
+    [data-testid="stChatInput"] div[data-baseweb="base-input"] {
+        outline: none !important;
+        box-shadow: none !important;
+        border: none !important;
+        background: transparent !important;
+    }
+
     @media (prefers-reduced-motion: reduce) {
         .glow-title { animation: none !important; }
+    }
+
+    /* ── Model selector (pinned below the chat input) ── */
+    [data-testid="stBottomBlockContainer"] { padding-bottom: 4rem !important; }
+    
+    .st-key-model_bar {
+        position: fixed !important;
+        bottom: 12px;
+        left: 0; right: 0; margin: 0 auto;
+        max-width: 46rem !important; /* Exactly match Streamlit centered chat input max-width */
+        padding: 0 1rem 0 1.5rem !important; /* Slightly more left padding to align with the + icon */
+        z-index: 1000;
+        display: flex !important;
+        flex-direction: row !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
+        gap: 12px !important;
+        pointer-events: none;
+    }
+    .st-key-model_bar > * { pointer-events: auto; }
+    .st-key-model_bar [data-testid="stElementContainer"] { width: auto !important; flex: 0 0 auto !important; }
+    
+    /* Neon Blue UI pill */
+    .st-key-model_bar button {
+        background: rgba(8,17,42,0.9) !important;
+        color: var(--neon-bright) !important;
+        border: 1px solid var(--neon) !important;
+        border-radius: 999px !important;
+        min-height: 32px !important;
+        padding: 4px 16px !important;
+        font-size: 0.83rem !important;
+        box-shadow: 0 0 12px rgba(26,180,255,0.4) !important;
+        transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease !important;
+        white-space: nowrap !important;
+        width: auto !important;
+    }
+    .st-key-model_bar button:hover,
+    .st-key-model_bar button[aria-expanded="true"] {
+        background: rgba(26,180,255,0.15) !important;
+        border-color: #fff !important;
+        color: #fff !important;
+        box-shadow: 0 0 20px rgba(26,180,255,0.8) !important;
+    }
+
+    .model-chip {
+        font-size: 0.76rem; white-space: nowrap;
+        color: #ffc46b !important;
+        background: rgba(255,196,107,0.08);
+        border: 1px solid rgba(255,196,107,0.28);
+        border-radius: 999px; padding: 5px 11px;
+    }
+
+    /* Open menu */
+    [data-testid="stPopoverBody"] {
+        background: #02060f !important;
+        border: 1px solid var(--border-strong) !important;
+        border-radius: 16px !important;
+        padding: 10px !important;
+        min-width: 300px;
+        box-shadow: 0 -12px 40px rgba(0,0,0,0.7), 0 0 30px rgba(26,180,255,0.20) !important;
+    }
+    .menu-title { color: var(--text-muted) !important; font-size: 0.78rem; margin: 2px 8px 8px 8px !important; }
+
+    [class*="st-key-mdl_"] button, [class*="st-key-mdlsel_"] button {
+        justify-content: flex-start !important;
+        background: transparent !important;
+        color: var(--text-soft) !important;
+        border: 1px solid transparent !important;
+        border-radius: 10px !important;
+        padding: 9px 12px !important;
+        min-height: 0 !important;
+        font-size: 0.85rem !important;
+        box-shadow: none !important;
+    }
+    [class*="st-key-mdl_"] button p, [class*="st-key-mdlsel_"] button p { text-align: left !important; }
+    [class*="st-key-mdl_"] button:hover {
+        background: rgba(26,180,255,0.08) !important;
+        color: var(--text) !important;
+    }
+    [class*="st-key-mdlsel_"] button {
+        background: rgba(26,180,255,0.12) !important;
+        color: var(--neon-bright) !important;
+        border-color: var(--border-strong) !important;
+        box-shadow: inset 3px 0 0 var(--neon) !important;
+    }
+
+    @media (max-width: 640px) {
+        .model-chip { display: none; }
+        [data-testid="stPopoverBody"] { min-width: 260px; }
     }
 
     /* ── Mobile ── */
@@ -521,7 +674,8 @@ button:focus-visible, a:focus-visible {
 # 7. SIDEBAR
 # ══════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("## ⚡ ZtifAI")
+    icon_svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="1em" height="1em" style="vertical-align: -0.15em;"><defs><linearGradient id="neonGradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#8fe6ff" /><stop offset="45%" stop-color="#1ab4ff" /><stop offset="100%" stop-color="#3366ff" /></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M 25 25 L 70 25 L 30 75 L 75 75" fill="none" stroke="url(#neonGradient)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/><path d="M 75 15 Q 82 20 82 27 Q 82 20 89 15 Q 82 15 82 8 Q 82 15 75 15 Z" fill="#8fe6ff" filter="url(#glow)"/><path d="M 15 85 Q 20 88 20 93 Q 20 88 25 85 Q 20 85 20 80 Q 20 85 15 85 Z" fill="#66d9ff" filter="url(#glow)"/></svg>'
+    st.markdown(f"## {icon_svg} ZtifAI", unsafe_allow_html=True)
     st.markdown("---")
 
     st.button(
@@ -529,6 +683,7 @@ with st.sidebar:
         on_click=cb_new_chat,
         use_container_width=True,
         key="new_chat",
+        disabled=st.session_state.processing,
     )
 
     st.markdown("---")
@@ -567,7 +722,7 @@ with st.sidebar:
                         on_click=cb_load_chat,
                         args=(chat_id,),
                         use_container_width=True,
-                        disabled=is_current,
+                        disabled=is_current or st.session_state.processing,
                     )
                 with col2:
                     st.button(
@@ -577,6 +732,7 @@ with st.sidebar:
                         args=(chat_id,),
                         use_container_width=True,
                         help="Delete chat",
+                        disabled=st.session_state.processing,
                     )
 
     st.markdown("---")
@@ -585,11 +741,28 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    # (Model selector moved to main body)
+
+# After picking a model, close the menu (it stays open by default)
+if st.session_state.close_model_menu:
+    components.html(
+        """
+        <script>
+            const d = window.parent.document;
+            ["keydown", "keyup"].forEach(t =>
+                d.dispatchEvent(new KeyboardEvent(t, {key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true}))
+            );
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state.close_model_menu = False
+
 # ══════════════════════════════════════════════
 # 8. API KEY GUARD
 # ══════════════════════════════════════════════
 if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
-    st.markdown('<h1 class="glow-title">⚡ ZtifAI</h1>', unsafe_allow_html=True)
+    st.markdown(f'<h1 class="glow-title">{icon_svg} ZtifAI</h1>', unsafe_allow_html=True)
     st.markdown('<p class="subtitle">Your personal AI assistant</p>', unsafe_allow_html=True)
     st.markdown(
         """
@@ -623,119 +796,319 @@ SYSTEM_INSTRUCTION = (
 )
 
 # ══════════════════════════════════════════════
-# 10. MAIN HEADER + STARTERS (only when chat is empty)
-# ══════════════════════════════════════════════
-if not st.session_state.messages and not st.session_state.processing:
-    st.markdown('<h1 class="glow-title">⚡ ZtifAI</h1>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="subtitle">Ask anything, or start with one of these.</p>',
-        unsafe_allow_html=True,
-    )
-    for row in range(0, len(STARTERS), 2):
-        cols = st.columns(2)
-        for col, idx in zip(cols, (row, row + 1)):
-            if idx < len(STARTERS):
-                label, text = STARTERS[idx]
-                with col:
-                    st.button(
-                        label,
-                        key=f"sug_{idx}",
-                        on_click=cb_starter,
-                        args=(text,),
-                        use_container_width=True,
+
+if st.session_state.get("viewing_doc_name"):
+    chat_layout, doc_layout = st.columns([1.5, 1], gap="large")
+else:
+    chat_layout = st.container()
+    doc_layout = None
+
+with chat_layout:
+    # 10. MAIN HEADER + STARTERS (only when chat is empty)
+    # ══════════════════════════════════════════════
+    header_container = st.empty()
+    if not st.session_state.messages and not st.session_state.processing:
+        with header_container.container():
+            st.markdown(f'<h1 class="glow-title">{icon_svg} ZtifAI</h1>', unsafe_allow_html=True)
+            st.markdown(
+                '<p class="subtitle">Ask anything, or start with one of these.</p>',
+                unsafe_allow_html=True,
+            )
+            for row in range(0, len(STARTERS), 2):
+                cols = st.columns(2)
+                for col, idx in zip(cols, (row, row + 1)):
+                    if idx < len(STARTERS):
+                        label, text = STARTERS[idx]
+                        with col:
+                            st.button(
+                                label,
+                                key=f"sug_{idx}",
+                                on_click=cb_starter,
+                                args=(text,),
+                                use_container_width=True,
+                            )
+    else:
+        header_container.empty()
+    
+    # ══════════════════════════════════════════════
+    # 11. DISPLAY CHAT MESSAGES
+    # ══════════════════════════════════════════════
+    for msg_idx, msg in enumerate(st.session_state.messages):
+        avatar = "👤" if msg["role"] == "user" else "icon.svg"
+        with st.chat_message(msg["role"], avatar=avatar):
+            if isinstance(msg["content"], list):
+                for p_idx, part in enumerate(msg["content"]):
+                    if part.get("type") == "text":
+                        if "file_name" in part:
+                            st.button(
+                                f"📄 View Attached: {part['file_name']}", 
+                                key=f"view_{msg_idx}_{p_idx}", 
+                                on_click=cb_view_doc, 
+                                args=(part["text"], part["file_name"], part.get("base64_preview"), part.get("mime")),
+                                disabled=st.session_state.processing
+                            )
+                        else:
+                            st.markdown(part.get("text", ""))
+                    elif part.get("type") == "image_url":
+                        st.image(part["image_url"]["url"])
+            else:
+                st.markdown(msg["content"])
+    
+    # ══════════════════════════════════════════════
+    # 12. STOP BUTTON (visible only while processing)
+    # ══════════════════════════════════════════════
+    if st.session_state.processing:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.button(
+                ":material/stop_circle: Stop generating",
+                on_click=cb_stop_generating,
+                use_container_width=True,
+                key="stop_btn",
+            )
+    
+    # ══════════════════════════════════════════════
+    # 13. AI RESPONSE GENERATION (streaming)
+    # ══════════════════════════════════════════════
+    if st.session_state.processing and st.session_state.pending_prompt:
+        prompt = st.session_state.pending_prompt
+    
+        with st.chat_message("assistant", avatar="icon.svg"):
+            placeholder = st.empty()
+            placeholder.markdown("▌")
+    
+            max_retries = 4
+            base_delay = 2
+    
+            for attempt in range(max_retries + 1):
+                try:
+                    messages_for_api = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+                    
+                    # Clean custom fields before sending to OpenRouter API
+                    for m in st.session_state.messages:
+                        if isinstance(m["content"], list):
+                            clean_content = []
+                            for part in m["content"]:
+                                if part.get("type") == "text":
+                                    clean_content.append({"type": "text", "text": part.get("text")})
+                                elif part.get("type") == "image_url":
+                                    clean_content.append({"type": "image_url", "image_url": part.get("image_url")})
+                            messages_for_api.append({"role": m["role"], "content": clean_content})
+                        else:
+                            messages_for_api.append({"role": m["role"], "content": m["content"]})
+    
+                    selected_model = st.session_state.get("selected_model", MODEL_NAME)
+                    response = client.chat.completions.create(
+                        model=selected_model,
+                        messages=messages_for_api,
+                        stream=True,
                     )
-
-# ══════════════════════════════════════════════
-# 11. DISPLAY CHAT MESSAGES
-# ══════════════════════════════════════════════
-for msg in st.session_state.messages:
-    avatar = "👤" if msg["role"] == "user" else "⚡"
-    with st.chat_message(msg["role"], avatar=avatar):
-        st.markdown(msg["content"])
-
-# ══════════════════════════════════════════════
-# 12. STOP BUTTON (visible only while processing)
-# ══════════════════════════════════════════════
-if st.session_state.processing:
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.button(
-            ":material/stop_circle: Stop generating",
-            on_click=cb_stop_generating,
-            use_container_width=True,
-            key="stop_btn",
-        )
-
-# ══════════════════════════════════════════════
-# 13. AI RESPONSE GENERATION (streaming)
-# ══════════════════════════════════════════════
-if st.session_state.processing and st.session_state.pending_prompt:
-    prompt = st.session_state.pending_prompt
-
-    with st.chat_message("assistant", avatar="⚡"):
-        placeholder = st.empty()
-        placeholder.markdown("▌")
-
-        max_retries = 4
-        base_delay = 2
-
-        for attempt in range(max_retries + 1):
-            try:
-                messages_for_api = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
-                messages_for_api.extend(st.session_state.messages)
-
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages_for_api,
-                    stream=True,
-                )
-
-                full_response = ""
-                for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        full_response += chunk.choices[0].delta.content
-                        st.session_state.partial_response = full_response
-                        placeholder.markdown(full_response + "▌")
-
-                placeholder.markdown(full_response)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": full_response}
-                )
-                break
-
-            except Exception as e:
-                error_str = str(e)
-                is_retriable = any(
-                    code in error_str for code in ["429", "403", "502", "503", "rate-limited"]
-                )
-
-                if is_retriable and attempt < max_retries:
-                    time.sleep(base_delay * (2 ** attempt))
-                    placeholder.markdown("▌")
-                    continue
-                else:
-                    error_msg = f"⚠️ Something went wrong: `{e}`"
-                    placeholder.markdown(error_msg)
+    
+                    full_response = ""
+                    for chunk in response:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            full_response += chunk.choices[0].delta.content
+                            st.session_state.partial_response = full_response
+                            placeholder.markdown(full_response + "▌")
+    
+                    placeholder.markdown(full_response)
                     st.session_state.messages.append(
-                        {"role": "assistant", "content": error_msg}
+                        {"role": "assistant", "content": full_response}
                     )
                     break
+    
+                except Exception as e:
+                    error_str = str(e).lower()
+                    
+                    is_exhausted = any(
+                        code in error_str for code in ["429", "403", "402", "rate-limited", "out of credits", "token", "balance", "limit"]
+                    )
+                    is_temp_error = any(
+                        code in error_str for code in ["502", "503", "500", "timeout", "connection"]
+                    )
+                    
+                    if is_exhausted:
+                        if "exhausted_models" not in st.session_state or isinstance(st.session_state.exhausted_models, set):
+                            st.session_state.exhausted_models = {}
+                            
+                        import re
+                        reset_time = None
+                        match = re.search(r"'X-RateLimit-Reset': '(\d+)'", error_str, re.IGNORECASE)
+                        if match:
+                            reset_time = int(match.group(1)) / 1000.0
+                            
+                        st.session_state.exhausted_models[selected_model] = reset_time
+                        
+                        next_model = None
+                        for m in MODELS_LIST:
+                            if m not in st.session_state.exhausted_models:
+                                next_model = m
+                                break
+                                
+                        if next_model:
+                            st.session_state.selected_model = next_model
+                            st.toast(f"Model busy/exhausted. Auto-switching to {model_label(next_model)}...", icon="🔄")
+                            st.rerun()
+                        else:
+                            error_msg = f"⚠️ All available models are currently busy or exhausted. Please try again later."
+                            placeholder.markdown(error_msg)
+                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                            break
+                            
+                    elif is_temp_error and attempt < max_retries:
+                        time.sleep(base_delay * (2 ** attempt))
+                        placeholder.markdown("▌")
+                        continue
+                    else:
+                        error_msg = f"⚠️ Something went wrong: `{e}`"
+                        placeholder.markdown(error_msg)
+                        st.session_state.messages.append(
+                            {"role": "assistant", "content": error_msg}
+                        )
+                        break
+    
+        st.session_state.processing = False
+        st.session_state.pending_prompt = None
+        st.session_state.partial_response = ""
+        save_current_chat()
+        st.rerun()
+    
+    # ══════════════════════════════════════════════
 
-    st.session_state.processing = False
-    st.session_state.pending_prompt = None
-    st.session_state.partial_response = ""
-    save_current_chat()
-    st.rerun()
+if doc_layout:
+    with doc_layout:
+        st.markdown(f"### 📄 {st.session_state.viewing_doc_name}")
+        st.button("❌ Close Panel", on_click=cb_close_doc, use_container_width=True, disabled=st.session_state.processing)
+        
+        if st.session_state.viewing_doc_b64:
+            b64 = st.session_state.viewing_doc_b64
+            mime = st.session_state.viewing_doc_mime or "application/pdf"
+            pdf_html = f'<iframe src="data:{mime};base64,{b64}" width="100%" height="700px" type="{mime}"></iframe>'
+            st.markdown(pdf_html, unsafe_allow_html=True)
+        else:
+            with st.container(height=600):
+                st.text(st.session_state.viewing_doc_text)
 
+# 14. MODEL SELECTOR (Pinned below chat input)
 # ══════════════════════════════════════════════
-# 14. CHAT INPUT (disabled while processing)
-# ══════════════════════════════════════════════
-if prompt := st.chat_input("Message ZtifAI...", disabled=st.session_state.processing):
-    with st.chat_message("user", avatar="👤"):
-        st.markdown(prompt)
+current_model = st.session_state.selected_model
+with st.container(key="model_bar"):
+    with st.popover(
+        f":material/bolt: {model_label(current_model)}",
+        disabled=st.session_state.processing,
+    ):
+        st.markdown('<p class="menu-title">Model</p>', unsafe_allow_html=True)
+        for i, m in enumerate(MODELS_LIST):
+            is_sel = m == current_model
+            
+            # Check exhaustion status and auto-reset
+            is_exhausted = False
+            label_suffix = ""
+            exhausted_dict = st.session_state.get("exhausted_models", {})
+            if isinstance(exhausted_dict, set):
+                exhausted_dict = {model: None for model in exhausted_dict}
+                st.session_state.exhausted_models = exhausted_dict
+                
+            if m in exhausted_dict:
+                reset_time = exhausted_dict[m]
+                if reset_time is not None and time.time() > reset_time:
+                    del exhausted_dict[m]
+                else:
+                    is_exhausted = True
+                    if reset_time:
+                        mins = max(1, int((reset_time - time.time()) / 60))
+                        label_suffix = f" (Resets in {mins}m)"
+                    else:
+                        label_suffix = " (Out of tokens)"
+            
+            if is_exhausted:
+                label_prefix = ":material/error: "
+            else:
+                label_prefix = ":material/check: " if is_sel else ""
 
-    st.session_state.messages.append({"role": "user", "content": prompt})
+            st.button(
+                label_prefix + model_label(m) + label_suffix,
+                key=f"{'mdlsel' if is_sel else 'mdl'}_{i}",
+                on_click=cb_select_model,
+                args=(m,),
+                use_container_width=True,
+                disabled=is_exhausted
+            )
+    if current_model in TEXT_ONLY_MODELS:
+        st.markdown('<span class="model-chip">Text only mode</span>', unsafe_allow_html=True)
+
+# 15. CHAT INPUT (disabled while processing)
+# ══════════════════════════════════════════════
+if prompt := st.chat_input("Message ZtifAI...", disabled=st.session_state.processing, accept_file="multiple"):
+
+    if hasattr(prompt, "text") and hasattr(prompt, "files"):
+        text_val = prompt.text
+        files_val = prompt.files
+    elif isinstance(prompt, dict):
+        text_val = prompt.get("text", "")
+        files_val = prompt.get("files", [])
+    else:
+        text_val = prompt
+        files_val = []
+
+    # Text-only models can't read images: drop them and say so
+    has_images = any(f.type.startswith("image/") for f in files_val)
+    if has_images and st.session_state.get("selected_model", MODEL_NAME) in TEXT_ONLY_MODELS:
+        st.toast(
+            "This model doesn't support images, so they weren't sent. Pick another model to use images.",
+            icon=":material/image_not_supported:",
+        )
+        files_val = []
+        if not text_val:
+            st.stop()
+
+    content_list = []
+    if text_val:
+        content_list.append({"type": "text", "text": text_val})
+
+    for f in files_val:
+        if f.type.startswith("image/"):
+            b64 = base64.b64encode(f.getvalue()).decode("utf-8")
+            mime = f.type
+            content_list.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"}
+            })
+        else:
+            try:
+                text_content = None
+                fname = f.name.lower()
+                
+                if fname.endswith(".pdf"):
+                    # pyrefly: ignore [missing-import]
+                    from pypdf import PdfReader
+                    pdf = PdfReader(f)
+                    text_content = "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
+                
+                elif fname.endswith(".docx"):
+                    # pyrefly: ignore [missing-import]
+                    from docx import Document
+                    doc = Document(f)
+                    text_content = "\n".join(para.text for para in doc.paragraphs)
+                
+                else:
+                    text_content = f.getvalue().decode("utf-8")
+                
+                if text_content is not None:
+                    content_list.append({
+                        "type": "text",
+                        "text": f"\n\n--- Contents of {f.name} ---\n{text_content}\n--- End of {f.name} ---\n",
+                        "file_name": f.name,
+                        "base64_preview": base64.b64encode(f.getvalue()).decode("utf-8") if fname.endswith(".pdf") else None,
+                        "mime": f.type
+                    })
+            except Exception as e:
+                st.toast(f"Could not read {f.name}. Make sure it's a valid text, PDF, Word doc, or image.", icon="⚠️")
+
+    final_content = content_list if files_val else text_val
+
+    st.session_state.messages.append({"role": "user", "content": final_content})
     st.session_state.processing = True
-    st.session_state.pending_prompt = prompt
+    st.session_state.pending_prompt = final_content if final_content else "image"
     save_current_chat()
     st.rerun()
