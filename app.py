@@ -17,45 +17,35 @@ BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1") # Default o
 # We are using a single model from .env now
 MODEL_NAME = os.getenv("MODEL_NAME", "poolside/poolside-model-id-here")
 
-CONV_DIR = Path(__file__).parent / "conversations"
-CONV_DIR.mkdir(exist_ok=True)
-
-
 # ══════════════════════════════════════════════
 # 2. CONVERSATION MANAGEMENT
 # ══════════════════════════════════════════════
 def load_all_conversations():
-    """Load all saved conversations, sorted newest first."""
-    convs = {}
-    for f in CONV_DIR.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            convs[data["id"]] = data
-        except Exception:
-            pass
+    """Load all saved conversations from the current session, sorted newest first."""
+    if "all_conversations" not in st.session_state:
+        st.session_state.all_conversations = {}
     return dict(
-        sorted(convs.items(), key=lambda x: x[1].get("timestamp", ""), reverse=True)
+        sorted(st.session_state.all_conversations.items(), key=lambda x: x[1].get("timestamp", ""), reverse=True)
     )
 
 
 def save_conversation(chat_id, title, messages):
-    """Save a conversation to a JSON file."""
-    data = {
+    """Save a conversation to the current session state."""
+    if "all_conversations" not in st.session_state:
+        st.session_state.all_conversations = {}
+    
+    st.session_state.all_conversations[chat_id] = {
         "id": chat_id,
         "title": title,
         "messages": messages,
         "timestamp": datetime.now().isoformat(),
     }
-    (CONV_DIR / f"{chat_id}.json").write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
 
 
 def delete_conversation(chat_id):
-    """Delete a saved conversation file."""
-    filepath = CONV_DIR / f"{chat_id}.json"
-    if filepath.exists():
-        filepath.unlink()
+    """Delete a conversation from the session state."""
+    if "all_conversations" in st.session_state and chat_id in st.session_state.all_conversations:
+        del st.session_state.all_conversations[chat_id]
 
 
 def auto_title(messages):
@@ -134,6 +124,7 @@ def cb_cancel_delete():
 # 4. SESSION STATE DEFAULTS
 # ══════════════════════════════════════════════
 _defaults = {
+    "all_conversations": {},
     "messages": [],
     "current_chat_id": str(uuid.uuid4()),
     "processing": False,
